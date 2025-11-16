@@ -1,89 +1,84 @@
 # Judge template lightly adapted from HELM's MedDialog evaluation
+# Judge template adapted from HELM-style prompts, rewritten for MedicationQA Q→A evaluation
 JUDGE_TEMPLATE = """\
-You are a medical expert tasked with evaluating responses to consumer medication questions.
+You are a medical expert tasked with evaluating how well a model answered a consumer medication question.
 
-Your goal is to assess how well the response captures the information asked,
-and how it compares to the gold response in terms of accuracy, completeness, and clarity.
+Your goal is to assess the quality of the model’s answer and how it compares to the reference answer. 
+You will rate the answer along three dimensions: accuracy, completeness, and clarity.
 
-The question provided in these tags:
+Definitions:
+- Accuracy: Are the medical statements correct and free of misinformation?
+- Completeness: Does the answer address all medically relevant aspects of the question?
+- Clarity: Is the answer understandable, well-structured, and appropriate for a layperson?
+
+The question will be provided in these tags:
 <medication_question>
 {question}
 </medication_question>
 
-The response will be provided in these tags:
-<response>
+The model's answer will be provided in these tags:
+<model_answer>
 {response}
-</response>
+</model_answer>
 
-The reference response will be provided in these tags:
-<gold_response>
+The reference answer will be provided in these tags:
+<reference_answer>
 {gold_response}
-</gold_response>
+</reference_answer>
 
-Carefully review the <response> and compare it to the <gold_response> when needed.
-
-Please evaluate the generated summary on a scale of 1-5 (1 = poor, 5 = excellent)
-for each of these three key dimensions:
-
-Evaluation Criteria:
-Accuracy (1-5)
-- Does the summary correctly capture the main medical issue and clinical details from the conversation?
-
-Completeness (1-5)
-- Does the summary include all important medical information from the conversation?
-
-Clarity (1-5)
-- Is the summary easy to understand for clinical use?
+For each dimension:
+1. Provide a brief explanation (1–3 sentences) describing why you assigned the score.
+2. Then assign a score from 1 to 5: 
+   1 = very poor, 2 = poor, 3 = adequate, 4 = good, 5 = excellent.
 
 Output Format:
 {output_format}
 """
 
+# JSON output schema
 JUDGE_OUTPUT_JSON = """
 Output your evaluation as a single valid JSON object matching the following structure:
 {
-      "accuracy": {
-          "score": 0,
-          "explanation": "Brief explanation of why this score was given."
-      },
-      "completeness": {
-          "score": 0,
-          "explanation": "Brief explanation of why this score was given."
-      },
-      "clarity": {
-          "score": 0,
-          "explanation": "Brief explanation of why this score was given."
-      }
-
+  "accuracy": {
+    "reason": "Brief explanation of why this score was given.",
+    "score": 0
+  },
+  "completeness": {
+    "reason": "Brief explanation of why this score was given.",
+    "score": 0
+  },
+  "clarity": {
+    "reason": "Brief explanation of why this score was given.",
+    "score": 0
+  }
+}
 
 Ensure the output is valid JSON:
-- Use **double quotes** (") for all keys and string values.
-- When quoting text or sections inside the explanations, use escaped double quotes (") to
-  maintain valid JSON formatting.
-- Do not include any additional information in the output.
-- Do not wrap any additional text outside the JSON object.
-- If you must explain your reasoning, put it inside the "explanation" fields only.
+- Use double quotes (") for all keys and string values.
+- Escape any internal quotes inside the reason fields.
+- Do not include any additional text outside the JSON object.
+- Do not explain your reasoning outside the JSON object; all justification must appear only in the "reason" fields.
 """
 
+# XML output schema
 JUDGE_OUTPUT_XML = """
 Output your evaluation as a single valid XML object matching the following structure:
 <evaluation>
   <accuracy>
+    <reason>Brief explanation of why this score was given.</reason>
     <score>0</score>
-    <explanation>Brief explanation of why this score was given.</explanation>
   </accuracy>
   <completeness>
+    <reason>Brief explanation of why this score was given.</reason>
     <score>0</score>
-    <explanation>Brief explanation of why this score was given.</explanation>
   </completeness>
   <clarity>
+    <reason>Brief explanation of why this score was given.</reason>
     <score>0</score>
-    <explanation>Brief explanation of why this score was given.</explanation>
   </clarity>
 </evaluation>
 
 Ensure the output is valid XML:
-- Escape special characters in text nodes: & as &amp;, < as &lt;, > as &gt;, " as &quot;, ' as &apos;.
-  (Alternatively, wrap quoted passages inside <![CDATA[ ... ]]> blocks.)
-- Do not include any additional information in the output.
+- Escape special characters in text nodes: & as &amp;, < as &lt;, > as &gt;, " as &quot;, ' as &apos;
+- Do not include any additional text outside the XML object.
 """

@@ -280,13 +280,15 @@ def load_environment(
 
         normalized = _compute_normalized_reward(parsed)
 
-        state.setdefault("judge_feedback", []).append(
-            {
-                "scores": parsed,
-                "raw_judge": str(judge_raw),
-            }
-        )
+        judge_record = {
+            "scores": parsed,  # per-dimension score + reason
+            "raw_judge": str(judge_raw),
+        }
+        # store judge feedback directly as a top-level state column
+        state["judge_feedback"] = judge_record
 
+        # per-example metadata (will be surfaced in results.info)
+        info["judge_feedback"] = judge_record
         return normalized
 
     judge_rubric.add_reward_func(reward_medicationqa, weight=1.0)
