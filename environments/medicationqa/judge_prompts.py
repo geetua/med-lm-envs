@@ -3,7 +3,7 @@
 JUDGE_TEMPLATE = """\
 You are a medical expert tasked with evaluating how well a model answered a consumer medication question.
 
-Your goal is to assess the quality of the model’s answer and how it compares to the reference answer. 
+Your goal is to assess the quality of the model’s answer and how it compares to the reference answer.
 You will rate the answer along three dimensions: accuracy, completeness, and clarity.
 
 Definitions:
@@ -28,7 +28,7 @@ The reference answer will be provided in these tags:
 
 For each dimension:
 1. Provide a brief explanation (1–3 sentences) describing why you assigned the score.
-2. Then assign a score from 1 to 5: 
+2. Then assign a score from 1 to 5:
    1 = very poor, 2 = poor, 3 = adequate, 4 = good, 5 = excellent.
 
 Output Format:
