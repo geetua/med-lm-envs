@@ -2,19 +2,27 @@
 
 ### Overview
 - **Environment ID**: `med_halt`
-- **Short description**: Med-HALT reasoning hallucination tests for medical LLMs
-- **Tags**: medical, hallucination, single-turn, multiple-choice, reasoning, test
+- **Short description**: Evaluate clinical reasoning hallucinations using Med-HALT’s FCT (False Confidence Test) and NOTA (None of the Above) tasks.
+- **Tags**: medical, hallucination, single-turn, multiple-choice, clinical reasoning, evaluation
 
 ### Datasets
 - **Primary dataset(s)**: `Med-HALT` (reasoning subset)
 - **Source links**: [Paper](https://arxiv.org/abs/2307.15343), [HF Dataset](https://huggingface.co/datasets/openlifescienceai/Med-HALT)
+The upstream dataset ships only a **single split**, but internally includes a `split_type` field (`train` / `val` / `test`).  
+This environment **filters to the `val` subset**, consistent with MedARC evaluation standards.
+
 - **Split sizes**:
 
     | Test Type       | Examples  | Description |
     | --------------- | --------- | ----------- |
-    | `reasoning_FCT` | **18,866** | False Confidence Test - evaluates if models can correctly assess proposed answers |
-    | `reasoning_nota` | **18,866** | None of the Above Test - tests if models can identify when no option is correct |
-    | `reasoning_fake` | **1,858** | Fake Questions Test - assesses if models can recognize nonsensical questions (excluded by default) |
+    | `reasoning_FCT` | **5,154** | False Confidence Test - evaluates if models can correctly assess proposed answers |
+    | `reasoning_nota` | **5,154** | None of the Above Test - tests if models can identify when no option is correct |
+    | `reasoning_fake` | _Not used_ | Fake Questions Test - assesses if models can recognize nonsensical questions (excluded by default) |
+
+Notes:
+- FCT’s validation subset is **extremely imbalanced**: almost all examples contain *incorrect* student answers.  
+- This is expected and documented behavior of the source dataset.
+
 
 ### Task
 - **Type**: single-turn
@@ -51,12 +59,13 @@ Notes:
 | `shuffle_seed`       | int \| None | `1618` | Random seed for reproducible answer shuffling |
 | `answer_format`      | str  | `"xml"` | Answer format: `"xml"` (default) or `"boxed"` |
 | `test_types`         | list[str] \| None | `["reasoning_FCT", "reasoning_nota"]` | Test types to include (options: `"reasoning_FCT"`, `"reasoning_nota"`, `"reasoning_fake"`) |
+| `split_type`         | str  | `"val"` | Logical split from the dataset (train / val / test) | 
 
 ### Metrics
 
 | Metric | Meaning |
 | ------ | ------- |
-| `accuracy` | (weight 1.0): 1.0 if parsed letter is correct, else 0.0 |
+| `accuracy` | 1.0 if parsed letter matches the gold letter, else 0.0 |
 
 ### Credits
 
