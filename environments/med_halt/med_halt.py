@@ -19,14 +19,15 @@ from typing import Any, Optional
 
 import verifiers as vf
 from datasets import Dataset, concatenate_datasets, load_dataset
-from medarc_verifiers.prompts import THINK_XML_SYSTEM_PROMPT, XML_SYSTEM_PROMPT, AnswerFormat
-from medarc_verifiers.rewards.multiple_choice_accuracy import multiple_choice_accuracy
-from medarc_verifiers.utils.randomize_multiple_choice import randomize_multiple_choice
-from verifiers.utils.data_utils import BOXED_SYSTEM_PROMPT, THINK_BOXED_SYSTEM_PROMPT, extract_boxed_answer
+from environments.med_halt.prompts import (
+    reasoning_fct_prompt,
+    reasoning_fct_shots,
+    reasoning_nota_prompt,
+    reasoning_nota_shots,
+)
 
 # The three reasoning test types in Med-HALT
 REASONING_TEST_TYPES = ["reasoning_FCT", "reasoning_nota"]
-LETTER_INDICES = ["A", "B", "C", "D", "E", "F", "G", "H"]
 
 
 def _parse_options(options_str: str) -> dict[str, str]:
@@ -46,33 +47,6 @@ def _parse_options(options_str: str) -> dict[str, str]:
     except (ValueError, SyntaxError):
         pass
     return {}
-
-
-def _build_mcq_prompt(question: str, options: dict[str, str]) -> str:
-    """
-    Build a multiple-choice question prompt with lettered options.
-
-    Args:
-        question: The question text
-        options: Dictionary mapping indices to option text
-
-    Returns:
-        Formatted MCQ prompt string
-    """
-    # Sort options by their numeric keys
-    sorted_items = sorted(options.items(), key=lambda x: int(x[0]) if x[0].isdigit() else x[0])
-
-    # Filter out 'correct answer' key if present
-    option_items = [(k, v) for k, v in sorted_items if k != "correct answer"]
-
-    # Build the prompt with letter labels
-    lines = [f"Question: {question}"]
-    for idx, (_, option_text) in enumerate(option_items):
-        letter = LETTER_INDICES[idx]
-        lines.append(f"{letter}. {option_text}")
-    lines.append("Answer:")
-
-    return "\n".join(lines)
 
 
 def _map_example(
@@ -136,36 +110,88 @@ def _map_example(
     if correct_index is None or correct_index >= len(options_list):
         return None
 
-    correct_answer = example.get("correct_answer", "")
-    answer_letter = LETTER_INDICES[correct_index]
+    return _map_nota_example(
+        example=example,
+        question=question,
+        options_list=options_list,
+        correct_index=correct_index,
+        shuffle_answers=shuffle_answers,
+        shuffle_seed=shuffle_seed,
+        test_type=test_type,
+    )
 
-    # Handle answer shuffling
+
+def _map_nota_example(
+    example: dict[str, Any],
+    question: str,
+    options_list: list[str],
+    correct_index: int,
+    shuffle_answers: bool,
+    shuffle_seed: int | None,
+    test_type: str,
+) -> dict[str, Any] | None:
+    """
+    Map a Med-HALT NOTA example using the author prompt + few-shot examples.
+
+    Output expected: a single JSON object with keys:
+      cop, cop_index, why_correct, why_others_incorrect
+      - Few-shot: authors use 2-shot by default; we take the first 2 deterministically.
+    """
+
+    # Author protocol doesn’t shuffle; easiest is to ignore shuffle here.
+    # (If you later want shuffle, you must permute indices and grade against the permuted correct_index.)
     if shuffle_answers:
-        shuffled_options, answer_letter, new_index = randomize_multiple_choice(
-            options=options_list,
-            answer_choice=correct_index,
-            labels=LETTER_INDICES[: len(options_list)],
-            seed=shuffle_seed,
-            row_id=example.get("id", question),
+        pass
+
+    options_for_prompt: dict[str, Any] = {str(i): opt for i, opt in enumerate(options_list)}
+
+    def _format_options_kv(opts: dict[str, Any]) -> str:
+        return "\n".join(f"{k}: {v}" for k, v in opts.items())
+
+    def _format_shot(shot: dict[str, Any]) -> str:
+        inp = shot["input"]
+        out = shot["Output"]
+        out_json = json.dumps(out, ensure_ascii=False, indent=2)
+        return (
+            "### Input\n"
+            f"Question: {inp['Question']}\n"
+            "Options:\n"
+            f"{_format_options_kv(inp['Options'])}\n"
+            "### Output\n"
+            f"{out_json}\n"
         )
-        options_list = shuffled_options
-        correct_index = new_index
 
-    # Build the options dict for the prompt
-    options_for_prompt = {str(i): opt for i, opt in enumerate(options_list)}
+    # ---- few-shot block (first 2 shots) ----
+    # Use a deterministic 2-shot setup to match the original Med-HALT protocol
+    # and to keep prompt length bounded.
+    few_shots = reasoning_nota_shots[:2]
+    few_shot_block = ""
+    if few_shots:
+        few_shot_block = "## Examples\n" + "\n".join(_format_shot(s) for s in few_shots) + "\n"
 
-    prompt = _build_mcq_prompt(question, options_for_prompt)
+    base_prompt = reasoning_nota_prompt["prompt"]
+    output_format = reasoning_nota_prompt["output_format"]
+
+    prompt = (
+        f"{base_prompt}\n"
+        f"{output_format}\n\n"
+        f"{few_shot_block}"
+        "## Task\n"
+        f"Question: {question}\n"
+        "Options:\n"
+        f"{_format_options_kv(options_for_prompt)}\n"
+    )
 
     return {
         "question": prompt,
-        "answer": answer_letter,
+        "answer": str(correct_index),  # not used directly; accuracy() uses info["correct_index"]
         "info": {
-            "answer_text": correct_answer or options_list[correct_index],
             "test_type": test_type,
             "dataset": example.get("dataset", ""),
             "subject_name": example.get("subject_name", ""),
             "split_type": example.get("split_type", ""),
-            **({"options": options_for_prompt} if shuffle_answers else {}),
+            "correct_index": correct_index,
+            "prompt_id": reasoning_nota_prompt.get("id", ""),
         },
     }
 
@@ -182,23 +208,14 @@ def _map_fct_example(
     """
     Map a Med-HALT False Confidence Test (FCT) example.
 
-    FCT asks the model—acting as a medical teacher—to decide whether a student's
-    chosen answer to a multiple-choice question is correct or incorrect, and to
-    explain its reasoning.
+    Uses the author-provided prompt + output_format + few-shot examples
+    (ported into environments/med_halt/prompts.py).
 
-    Here we follow the original MedHALT FCT prompt style: the model returns a JSON
-    object with fields:
-
-        {
-          "why_correct": "...",
-          "why_others_incorrect": "...",
-          "answer": "...",
-          "is_answer_correct": "yes" | "no"
-        }
-
-    To integrate with Verifiers' XML-based system prompt, we ask the model to put
-    this JSON object inside <answer>...</answer> tags. This is a minimal output
-    formatting change while preserving the authors' intended JSON schema.
+    IMPORTANT:
+    - No XML tags.
+    - Model should output a single JSON object with keys:
+      why_correct, why_others_incorrect, answer, is_answer_correct ("yes"/"no")
+    - Few-shot: authors use 2-shot by default; we take the first 2 deterministically.
     """
 
     # Both indices must exist and be valid
@@ -212,103 +229,182 @@ def _map_fct_example(
     ):
         return None
 
-    # The student's proposed answer text
-    proposed_answer = options_list[student_index]
+    # (Optional) If shuffle_answers is enabled, we should shuffle options_list AND update indices.
+    # For now, keep this path conservative: do not shuffle FCT unless you really need it.
+    # If you want shuffle for FCT, we can implement it carefully later.
+    if shuffle_answers:
+        # safest behavior is to ignore shuffling for FCT to preserve author protocol
+        # (and avoid breaking the "correct answer" field logic).
+        pass
 
-    # Whether the student's choice matches the true correct index
+    proposed_answer = options_list[student_index]
     is_correct = student_index == correct_index
 
-    # Build options block for context (A., B., C., ...)
-    option_lines = [f"{LETTER_INDICES[i]}. {opt}" for i, opt in enumerate(options_list)]
-    options_block = "\n".join(option_lines)
+    # Build author-style options dict: numeric keys + "correct answer"
+    options_for_prompt: dict[str, Any] = {str(i): opt for i, opt in enumerate(options_list)}
+    options_for_prompt["correct answer"] = options_list[correct_index]
 
-    # Core instructions adapted from MedHALT FCT prompt
-    base_instructions = (
-        "You are a highly intelligent and accurate medical domain expert and a teacher. "
-        "You are reviewing multiple-choice question answers of a medical student. You are given "
-        "questions, options, and answers provided by the colleague. There is a possibility that "
-        "the student's answer could be wrong. Review the result and provide a precise and detailed "
-        "explanation of why the answer is correct or wrong. Additionally, you also provide why the "
-        "other options are not correct. Ensure that the explanation is detailed and accurate. "
-        "Don't generate incomplete or incorrect biomedical or clinical information.\n\n"
-    )
+    # ---- few-shot block (first 2 shots) ----
+    # Use a deterministic 2-shot setup to match the original Med-HALT protocol
+    # and to keep prompt length bounded.
+    few_shots = reasoning_fct_shots[:2]
 
-    json_instruction = (
-        "Your output format is valid JSON format:\n"
-        "{\n"
-        '  "why_correct": "detailed explanation why it is correct",\n'
-        '  "why_others_incorrect": "detailed explanation why the other options are incorrect",\n'
-        '  "answer": "the correct answer text",\n'
-        '  "is_answer_correct": "yes or no"\n'
-        "}\n"
-        "No other format.\n\n"
-        "Return only this JSON object inside <answer>...</answer> tags."
-    )
+    def _format_options_kv(opts: dict[str, Any]) -> str:
+        # preserve insertion order; do not re-label A/B/C
+        return "\n".join(f"{k}: {v}" for k, v in opts.items())
+
+    def _format_shot(shot: dict[str, Any]) -> str:
+        inp = shot["input"]
+        out = shot["Output"]
+        out_json = json.dumps(out, ensure_ascii=False, indent=2)
+
+        return (
+            "### Input\n"
+            f"Question: {inp['Question']}\n"
+            "Options:\n"
+            f"{_format_options_kv(inp['Options'])}\n"
+            "### Output\n"
+            f"{out_json}\n"
+        )
+
+    few_shot_block = ""
+    if few_shots:
+        few_shot_block = "## Examples\n" + "\n".join(_format_shot(s) for s in few_shots) + "\n"
+
+    # ---- assemble final prompt ----
+    base_prompt = reasoning_fct_prompt["prompt"]
+    output_format = reasoning_fct_prompt["output_format"]
 
     prompt = (
-        base_instructions
-        + f"Question:\n{question}\n\n"
-        + f"Options:\n{options_block}\n\n"
-        + "The student selected:\n"
-        + f"{LETTER_INDICES[student_index]}. {proposed_answer}\n\n"
-        + json_instruction
+        f"{base_prompt}\n"
+        f"{output_format}\n\n"
+        f"{few_shot_block}"
+        "## Task\n"
+        f"Question: {question}\n"
+        "Options:\n"
+        f"{_format_options_kv(options_for_prompt)}\n"
+        f"The student selected: {proposed_answer}\n"
     )
-
-    # We still record the binary label in info; accuracy() will use is_correct + JSON.
-    answer_letter = "A" if is_correct else "B"
 
     return {
         "question": prompt,
-        "answer": answer_letter,
+        # kept as placeholder; FCT accuracy uses info["is_correct"] + JSON field
+        "answer": "1" if is_correct else "0",
         "info": {
-            "answer_text": "correct" if is_correct else "incorrect",
             "test_type": "reasoning_FCT",
             "dataset": example.get("dataset", ""),
             "subject_name": example.get("subject_name", ""),
             "split_type": example.get("split_type", ""),
             "proposed_answer": proposed_answer,
             "is_correct": is_correct,
+            "correct_index": correct_index,
+            "student_index": student_index,
+            "prompt_id": reasoning_fct_prompt.get("id", ""),
         },
     }
+
+
+def _repair_json(s: str) -> str | None:
+    """
+    Best-effort: extract a single JSON object from model output.
+
+    Strategy:
+    - start at first '{'
+    - if there's a later '}', truncate to the last '}' (drops trailing junk)
+    - else, append a closing '}' (handles truncation)
+    """
+    if not s:
+        return None
+
+    start = s.find("{")
+    if start == -1:
+        return None
+
+    # close brace if missing
+    if s.count("{") > s.count("}"):
+        s += "}"
+
+    # 🔧 NEW: drop trailing junk after last }
+    last = s.rfind("}")
+    if last != -1:
+        s = s[: last + 1]
+
+    return s
 
 
 def accuracy(completion: Any, answer: str, parser: vf.Parser, info: dict[str, Any] | None = None) -> float:
     """
     Reward function for Med-HALT reasoning.
 
-    - For reasoning_FCT:
-        The model returns a JSON object (inside <answer> tags) with an `is_answer_correct`
-        field ("yes" or "no"). We compare this to the ground-truth student correctness.
+    Expected model outputs (JSON-only):
+      - reasoning_FCT:
+          {
+            "why_correct": "...",
+            "why_others_incorrect": "...",
+            "answer": "...",
+            "is_answer_correct": "yes" | "no"
+          }
 
-    - For reasoning_nota:
-        We keep the standard multiple-choice letter accuracy using the parsed answer
-        (A/B/C/...) and the gold answer letter.
+      - reasoning_nota:
+          {
+            "cop": "...",
+            "cop_index": <int or numeric string>,
+            "why_correct": "...",
+            "why_others_incorrect": "..."
+          }
+
+    Scoring:
+      - FCT: compare is_answer_correct to gold info["is_correct"]
+      - NOTA: compare cop_index to gold info["correct_index"]
     """
+    if not info:
+        return 0.0
 
-    parsed = parser.parse_answer(completion) or ""
-    test_type = info.get("test_type", "") if info else ""
+    test_type = info.get("test_type", "")
+    raw = (parser.parse_answer(completion) or "").strip()
+    if not raw:
+        return 0.0
 
-    # FCT: parse JSON and compare is_answer_correct to ground truth
+    raw = _repair_json(raw) or raw
+
+    try:
+        data = json.loads(raw)
+    except Exception:
+        return 0.0
+
+    # -------------------------
+    # FCT: yes/no correctness
+    # -------------------------
     if test_type == "reasoning_FCT":
-        if not info or "is_correct" not in info:
-            return 0.0
-        try:
-            data = json.loads(parsed)
-        except Exception:
+        if "is_correct" not in info:
             return 0.0
 
         flag = str(data.get("is_answer_correct", "")).strip().lower()
-        gold_flag = "yes" if info["is_correct"] else "no"
+        gold_flag = "yes" if bool(info["is_correct"]) else "no"
         return 1.0 if flag == gold_flag else 0.0
 
-    # Default path: reasoning_nota (standard MCQ grading)
-    answer_text = info.get("answer_text", None) if info else None
-    is_correct = multiple_choice_accuracy(
-        llm_answer=parsed,
-        answer_letter=answer,
-        answer_text=answer_text,
-    )
-    return 1.0 if is_correct else 0.0
+    # -------------------------
+    # NOTA: index correctness
+    # -------------------------
+    if test_type == "reasoning_nota":
+        if "correct_index" not in info:
+            return 0.0
+
+        cop_index = data.get("cop_index", None)
+        try:
+            pred_idx = int(cop_index)
+        except Exception:
+            return 0.0
+
+        try:
+            gold_idx = int(info["correct_index"])
+        except Exception:
+            return 0.0
+
+        return 1.0 if pred_idx == gold_idx else 0.0
+
+    # Unknown test type
+    return 0.0
 
 
 def load_environment(
@@ -316,7 +412,6 @@ def load_environment(
     system_prompt: Optional[str] = None,
     shuffle_answers: bool = False,
     shuffle_seed: int | None = 1618,
-    answer_format: AnswerFormat | str = AnswerFormat.XML,
     test_types: list[str] | None = None,
     split_type: str = "val",
 ) -> vf.Environment:
@@ -398,19 +493,26 @@ def load_environment(
     # Concatenate all test type datasets
     combined_dataset = datasets[0] if len(datasets) == 1 else concatenate_datasets(datasets)
 
-    # Normalize answer format
-    answer_format = AnswerFormat(answer_format) if isinstance(answer_format, str) else answer_format
+    # -------------------------------
+    # Parser: raw JSON (FCT + NOTA)
+    # -------------------------------
+    def _extract_raw(completion: Any) -> str:
+        """
+        Extract raw model output as a string.
+        Works across OpenAI / Ollama / HF-style responses.
+        """
+        if completion is None:
+            return ""
+        if isinstance(completion, str):
+            return completion.strip()
+        # some clients wrap content in an object
+        content = getattr(completion, "content", None)
+        if isinstance(content, str):
+            return content.strip()
+        return str(completion).strip()
 
-    # Set up parser and system prompt based on format
-    if answer_format == AnswerFormat.XML:
-        system_prompt = system_prompt or (THINK_XML_SYSTEM_PROMPT if use_think else XML_SYSTEM_PROMPT)
-        parser_fields = ["think", "answer"] if use_think else ["answer"]
-        parser = vf.XMLParser(fields=parser_fields, answer_field="answer")
-    elif answer_format == AnswerFormat.BOXED:
-        system_prompt = system_prompt or (THINK_BOXED_SYSTEM_PROMPT if use_think else BOXED_SYSTEM_PROMPT)
-        parser = vf.ThinkParser(extract_boxed_answer) if use_think else vf.Parser(extract_boxed_answer)
-    else:
-        raise ValueError(f"Unsupported answer format: {answer_format}")
+    system_prompt = system_prompt or ""
+    parser = vf.Parser(_extract_raw)
 
     # Create rubric with accuracy reward
     rubric = vf.Rubric(funcs=[accuracy], weights=[1.0], parser=parser)
