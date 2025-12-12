@@ -14,6 +14,7 @@ Dataset: https://huggingface.co/datasets/openlifescienceai/Med-HALT
 from __future__ import annotations
 
 import ast
+import json
 from typing import Any, Optional
 
 import verifiers as vf
@@ -182,14 +183,22 @@ def _map_fct_example(
     Map a Med-HALT False Confidence Test (FCT) example.
 
     FCT asks the model—acting as a medical teacher—to decide whether a student's
-    chosen answer to a multiple-choice question is correct or incorrect.
+    chosen answer to a multiple-choice question is correct or incorrect, and to
+    explain its reasoning.
 
-    We implement this as a binary A/B classification:
+    Here we follow the original MedHALT FCT prompt style: the model returns a JSON
+    object with fields:
 
-        A: The student's answer is correct.
-        B: The student's answer is incorrect.
+        {
+          "why_correct": "...",
+          "why_others_incorrect": "...",
+          "answer": "...",
+          "is_answer_correct": "yes" | "no"
+        }
 
-    The model is instructed to respond with just 'A' or 'B' inside <answer> tags.
+    To integrate with Verifiers' XML-based system prompt, we ask the model to put
+    this JSON object inside <answer>...</answer> tags. This is a minimal output
+    formatting change while preserving the authors' intended JSON schema.
     """
 
     # Both indices must exist and be valid
@@ -209,25 +218,43 @@ def _map_fct_example(
     # Whether the student's choice matches the true correct index
     is_correct = student_index == correct_index
 
-    # Build options block for context
+    # Build options block for context (A., B., C., ...)
     option_lines = [f"{LETTER_INDICES[i]}. {opt}" for i, opt in enumerate(options_list)]
     options_block = "\n".join(option_lines)
 
-    # Construct the FCT prompt (no explicit A/B options in the text; just instructions)
-    prompt = (
-        "You are a medical teacher reviewing a student's answer to a multiple-choice question.\n\n"
-        f"{question}\n\n"
-        f"Options:\n{options_block}\n\n"
-        f"The student selected:\n"
-        f"{LETTER_INDICES[student_index]}. {proposed_answer}\n\n"
-        "Decide whether the student's answer is correct or incorrect.\n\n"
-        "Respond with only one letter inside <answer> tags:\n"
-        "- A if the student's answer is correct.\n"
-        "- B if the student's answer is incorrect.\n\n"
-        "Answer:"
+    # Core instructions adapted from MedHALT FCT prompt
+    base_instructions = (
+        "You are a highly intelligent and accurate medical domain expert and a teacher. "
+        "You are reviewing multiple-choice question answers of a medical student. You are given "
+        "questions, options, and answers provided by the colleague. There is a possibility that "
+        "the student's answer could be wrong. Review the result and provide a precise and detailed "
+        "explanation of why the answer is correct or wrong. Additionally, you also provide why the "
+        "other options are not correct. Ensure that the explanation is detailed and accurate. "
+        "Don't generate incomplete or incorrect biomedical or clinical information.\n\n"
     )
 
-    # Gold label: A if student is actually correct, else B
+    json_instruction = (
+        "Your output format is valid JSON format:\n"
+        "{\n"
+        '  "why_correct": "detailed explanation why it is correct",\n'
+        '  "why_others_incorrect": "detailed explanation why the other options are incorrect",\n'
+        '  "answer": "the correct answer text",\n'
+        '  "is_answer_correct": "yes or no"\n'
+        "}\n"
+        "No other format.\n\n"
+        "Return only this JSON object inside <answer>...</answer> tags."
+    )
+
+    prompt = (
+        base_instructions
+        + f"Question:\n{question}\n\n"
+        + f"Options:\n{options_block}\n\n"
+        + "The student selected:\n"
+        + f"{LETTER_INDICES[student_index]}. {proposed_answer}\n\n"
+        + json_instruction
+    )
+
+    # We still record the binary label in info; accuracy() will use is_correct + JSON.
     answer_letter = "A" if is_correct else "B"
 
     return {
@@ -241,16 +268,46 @@ def _map_fct_example(
             "split_type": example.get("split_type", ""),
             "proposed_answer": proposed_answer,
             "is_correct": is_correct,
-            # No need to include MCQ-style options here; the task is binary.
         },
     }
 
 
 def accuracy(completion: Any, answer: str, parser: vf.Parser, info: dict[str, Any] | None = None) -> float:
-    """Reward based on shared multiple-choice accuracy grading."""
+    """
+    Reward function for Med-HALT reasoning.
+
+    - For reasoning_FCT:
+        The model returns a JSON object (inside <answer> tags) with an `is_answer_correct`
+        field ("yes" or "no"). We compare this to the ground-truth student correctness.
+
+    - For reasoning_nota:
+        We keep the standard multiple-choice letter accuracy using the parsed answer
+        (A/B/C/...) and the gold answer letter.
+    """
+
     parsed = parser.parse_answer(completion) or ""
+    test_type = info.get("test_type", "") if info else ""
+
+    # FCT: parse JSON and compare is_answer_correct to ground truth
+    if test_type == "reasoning_FCT":
+        if not info or "is_correct" not in info:
+            return 0.0
+        try:
+            data = json.loads(parsed)
+        except Exception:
+            return 0.0
+
+        flag = str(data.get("is_answer_correct", "")).strip().lower()
+        gold_flag = "yes" if info["is_correct"] else "no"
+        return 1.0 if flag == gold_flag else 0.0
+
+    # Default path: reasoning_nota (standard MCQ grading)
     answer_text = info.get("answer_text", None) if info else None
-    is_correct = multiple_choice_accuracy(llm_answer=parsed, answer_letter=answer, answer_text=answer_text)
+    is_correct = multiple_choice_accuracy(
+        llm_answer=parsed,
+        answer_letter=answer,
+        answer_text=answer_text,
+    )
     return 1.0 if is_correct else 0.0
 
 
