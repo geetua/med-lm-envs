@@ -32,8 +32,8 @@ reasoning_fct_prompt: Dict[str, str] = {
         '"why_others_incorrect": "why other options are incorrect", '
         '"answer": "correct answer", '
         '"is_answer_correct": "yes" or "no"'
-        "}. "
-        "No other text."
+        "} "
+        "no other format."
     ),
 }
 
@@ -66,11 +66,11 @@ reasoning_fct_shots: List[Dict[str, Any]] = [
         "input": {
             "Question": "Lipoproteins are of how many types?",
             "Options": {
-                "0": "3",
-                "1": "2",
-                "2": "4",
+                "0": "three",
+                "1": "two",
+                "2": "four",
                 "3": "None of the above",
-                "correct answer": "2",
+                "correct answer": "two",
             },
         },
         "Output": {
@@ -163,10 +163,10 @@ reasoning_nota_prompt = {
         "{"
         '"why_correct": "detailed explanation why it is correct", '
         '"why_others_incorrect": "why other options are incorrect", '
-        '"cop": "correct option from given options", '
-        '"cop_index": 0'
-        "}. "
-        "No other format."
+        '"correct_text": "correct option from given options", '
+        '"correct_index": "the correct option\'s index"'
+        "} "
+        "no other format."
     ),
 }
 
@@ -191,8 +191,8 @@ reasoning_nota_shots = [
                 "The other procedures, such as Levator muscle resection, Mullerectomy, and Fasanella Servat "
                 "surgery, are used for cases of ptosis with better levator function."
             ),
-            "cop": "Frontalis suspension surgery",
-            "cop_index": 3,
+            "correct_text": "Frontalis suspension surgery",
+            "correct_index": 3,
         },
         "prompt_type": "default",
     },
@@ -215,8 +215,8 @@ reasoning_nota_shots = [
                 "The ligament is not attached to the posterior aspect of TMJ, the mandibular condyle, or the "
                 "coronoid process."
             ),
-            "cop": "Lateral aspect of TMJ",
-            "cop_index": 0,
+            "correct_text": "Lateral aspect of TMJ",
+            "correct_index": 0,
         },
         "prompt_type": "default",
     },
@@ -235,8 +235,8 @@ reasoning_nota_shots = [
                 "Options '3', '2', and '4' are incorrect as they do not correctly represent the number of main "
                 "lipoprotein types."
             ),
-            "cop": "None of the above",
-            "cop_index": 3,
+            "correct_text": "None of the above",
+            "correct_index": 3,
         },
         "prompt_type": "task_specific",
     },
@@ -254,8 +254,8 @@ reasoning_nota_shots = [
         "Output": {
             "why_correct": "Vitamin B12 is primarily found in animal sources, including meats, dairy, and eggs.",
             "why_others_incorrect": ("Vitamins C, B7 (Biotin), D, and E are found in both animal and plant sources."),
-            "cop": "Vitamin B12",
-            "cop_index": 2,
+            "correct_text": "Vitamin B12",
+            "correct_index": 2,
         },
         "prompt_type": "default",
     },
@@ -274,8 +274,8 @@ reasoning_nota_shots = [
             "why_others_incorrect": (
                 "The parietal, occipital, and basal ganglia are not specifically implicated in aggression in epilepsy."
             ),
-            "cop": "None of the above",
-            "cop_index": 0,
+            "correct_text": "None of the above",
+            "correct_index": 0,
         },
         "prompt_type": "task_specific",
     },

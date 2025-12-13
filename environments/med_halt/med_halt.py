@@ -11,9 +11,8 @@ Paper: https://arxiv.org/abs/2307.15343
 Dataset: https://huggingface.co/datasets/openlifescienceai/Med-HALT
 """
 
-from __future__ import annotations
-
 import ast
+from enum import Enum
 import json
 from typing import Any
 
@@ -28,8 +27,10 @@ from environments.med_halt.prompts import (
 from medarc_verifiers.parsers import JSONParser
 from medarc_verifiers.utils.randomize_multiple_choice import randomize_multiple_choice
 
-# The two supported reasoning test types in Med-HALT
-REASONING_TEST_TYPES = ["reasoning_FCT", "reasoning_nota"]
+
+class MedHaltSplit(str, Enum):
+    REASONING_FCT = "reasoning_fct"
+    REASONING_NOTA = "reasoning_nota"
 
 
 def _parse_options(options_str: str) -> dict[str, str]:
@@ -134,11 +135,21 @@ def _map_nota_example(
     Map a Med-HALT NOTA example using the author prompt + few-shot examples.
 
     Output expected: a single JSON object with keys:
-      cop, cop_index, why_correct, why_others_incorrect
+      correct_text, correct_index, why_correct, why_others_incorrect
       - Few-shot: authors use 2-shot by default; we take the first 2 deterministically.
     """
     options_for_prompt: dict[str, Any] = {str(i): opt for i, opt in enumerate(options_list)}
     answer_choice = str(correct_index)
+
+    # the "None of the above" answers are in random spots. Move them to the end
+    def move_none_to_last(d: dict, none_idx: str) -> dict:
+        last_key = next(reversed(d))  # key of the last inserted item
+        if none_idx != last_key:
+            d[none_idx], d[last_key] = d[last_key], d[none_idx]
+        return d, last_key
+
+    # In Nota, None of the Above is always the correct answer
+    options_for_prompt, answer_choice = move_none_to_last(options_for_prompt, answer_choice)
 
     if shuffle_answers and answer_choice in options_for_prompt:
         options_for_prompt, answer_choice, _ = randomize_multiple_choice(
@@ -147,8 +158,8 @@ def _map_nota_example(
             seed=shuffle_seed,
             row_id=question,  # or example.get("question")
         )
-        # update correct_index to match shuffled keys
-        correct_index = int(answer_choice)
+    # update correct_index to match shuffled keys
+    correct_index = int(answer_choice)
 
     def _format_options_kv(opts: dict[str, Any]) -> str:
         return "\n".join(f"{k}: {v}" for k, v in opts.items())
@@ -158,18 +169,18 @@ def _map_nota_example(
         out = shot["Output"]
         out_json = json.dumps(out, ensure_ascii=False, indent=2)
         return (
-            "### Input\n"
+            "## Input\n"
             f"Question: {inp['Question']}\n"
             "Options:\n"
             f"{_format_options_kv(inp['Options'])}\n"
-            "### Output\n"
+            "## Output\n"
             f"{out_json}\n"
         )
 
     few_shots = reasoning_nota_shots[:num_few_shot]
     few_shot_block = ""
     if few_shots:
-        few_shot_block = "## Examples\n" + "\n".join(_format_shot(s) for s in few_shots) + "\n"
+        few_shot_block = "# Examples\n" + "\n".join(_format_shot(s) for s in few_shots) + "\n"
 
     base_prompt = reasoning_nota_prompt["prompt"]
     output_format = reasoning_nota_prompt["output_format"]
@@ -178,10 +189,12 @@ def _map_nota_example(
         f"{base_prompt}\n"
         f"{output_format}\n\n"
         f"{few_shot_block}"
-        "## Task\n"
+        "# Task\n"
+        "## Input\n"
         f"Question: {question}\n"
         "Options:\n"
         f"{_format_options_kv(options_for_prompt)}\n"
+        "## Output\n"
     )
 
     info = {
@@ -235,12 +248,11 @@ def _map_fct_example(
     ):
         return None
 
-    proposed_answer = options_list[student_index]
     is_correct = student_index == correct_index
 
     # Build author-style options dict: numeric keys + "correct answer"
     options_for_prompt: dict[str, Any] = {str(i): opt for i, opt in enumerate(options_list)}
-    options_for_prompt["correct answer"] = options_list[correct_index]
+    options_for_prompt["correct answer"] = options_list[student_index]
 
     few_shots = reasoning_fct_shots[:num_few_shot]
 
@@ -254,17 +266,17 @@ def _map_fct_example(
         out_json = json.dumps(out, ensure_ascii=False, indent=2)
 
         return (
-            "### Input\n"
+            "## Input\n"
             f"Question: {inp['Question']}\n"
             "Options:\n"
             f"{_format_options_kv(inp['Options'])}\n"
-            "### Output\n"
+            "## Output\n"
             f"{out_json}\n"
         )
 
     few_shot_block = ""
     if few_shots:
-        few_shot_block = "## Examples\n" + "\n".join(_format_shot(s) for s in few_shots) + "\n"
+        few_shot_block = "# Examples\n" + "\n".join(_format_shot(s) for s in few_shots) + "\n"
 
     # ---- assemble final prompt ----
     base_prompt = reasoning_fct_prompt["prompt"]
@@ -274,11 +286,12 @@ def _map_fct_example(
         f"{base_prompt}\n"
         f"{output_format}\n\n"
         f"{few_shot_block}"
-        "## Task\n"
+        "# Task\n"
+        "## Input\n"
         f"Question: {question}\n"
         "Options:\n"
         f"{_format_options_kv(options_for_prompt)}\n"
-        f"The student selected: {proposed_answer}\n"
+        "## Output\n"
     )
 
     return {
@@ -290,7 +303,7 @@ def _map_fct_example(
             "dataset": example.get("dataset", ""),
             "subject_name": example.get("subject_name", ""),
             "split_type": example.get("split_type", ""),
-            "proposed_answer": proposed_answer,
+            "proposed_answer": options_list[student_index],
             "is_correct": is_correct,
             "correct_index": correct_index,
             "student_index": student_index,
@@ -314,15 +327,15 @@ def accuracy(completion: Any, answer: str, parser: vf.Parser, info: dict[str, An
 
       - reasoning_nota:
           {
-            "cop": "...",
-            "cop_index": <int or numeric string>,
+            "correct_text": "...",
+            "correct_index": <int or numeric string>,
             "why_correct": "...",
             "why_others_incorrect": "..."
           }
 
     Scoring:
       - FCT: compare is_answer_correct to gold info["is_correct"]
-      - NOTA: compare cop_index to gold info["correct_index"]
+      - NOTA: compare correct_index to gold info["correct_index"]
     """
 
     if not info:
@@ -361,9 +374,9 @@ def accuracy(completion: Any, answer: str, parser: vf.Parser, info: dict[str, An
         if "correct_index" not in info:
             return 0.0
 
-        cop_index = data.get("cop_index", None)
+        correct_index = data.get("correct_index", None)
         try:
-            pred_idx = int(cop_index)
+            pred_idx = int(correct_index)
         except Exception:
             return 0.0
 
@@ -379,13 +392,12 @@ def accuracy(completion: Any, answer: str, parser: vf.Parser, info: dict[str, An
 
 
 def load_environment(
-    use_think: bool = False,
     system_prompt: str | None = None,
     shuffle_answers: bool = False,
     shuffle_seed: int | None = 1618,
-    test_types: list[str] | None = None,
-    split_type: str = "val",
+    test_split: str | MedHaltSplit = MedHaltSplit.REASONING_FCT,
     num_few_shot: int = 2,
+    **kwargs,
 ) -> vf.Environment:
     """
     Load the Med-HALT (Reasoning) environment.
@@ -395,76 +407,42 @@ def load_environment(
         system_prompt: Custom system prompt (defaults to standard XML/BOXED prompt)
         shuffle_answers: Randomize the order of answer choices
         shuffle_seed: Random seed for reproducible shuffling
-        test_types: List of test types to include (default: ["reasoning_FCT", "reasoning_nota"])
-                    Supported: "reasoning_FCT", "reasoning_nota"
-        split_type: Logical split to use within HF train split (set to "val" or "train"; defaults to "val" if available)
+        test_split: The test split to use (default: "reasoning_fct"). Supported: "reasoning_fct", "reasoning_nota"
         num_few_shot: Number of few-shot examples to include (default: 2)
 
     Returns:
         A SingleTurnEnv configured for Med-HALT reasoning evaluation
     """
-    # Default to FCT and nota tests (excluding fake for now as it needs special handling)
-    if test_types is None:
-        test_types = ["reasoning_FCT", "reasoning_nota"]
 
-    # Validate test types
-    invalid_types = [t for t in test_types if t not in REASONING_TEST_TYPES]
-    if invalid_types:
-        raise ValueError(f"Invalid test types: {invalid_types}. Must be one of: {REASONING_TEST_TYPES}")
+    test_split = MedHaltSplit(test_split) if isinstance(test_split, str) else test_split
+    test_type = test_split.value if test_split is not MedHaltSplit.REASONING_FCT else "reasoning_FCT"
 
-    # Load datasets for each test type
-    datasets: list[Dataset] = []
-    for test_type in test_types:
-        # Med-HALT exposes a single HF "train" split and uses a split_type column
-        # to mark logical train/val/test. We select the desired logical split here.
-        ds_dict = load_dataset("openlifescienceai/Med-HALT", test_type)
-        if "train" not in ds_dict:
-            # Safety check, but in practice Med-HALT uses train only
-            continue
+    # Med-HALT exposes a single HF "train" split and uses a split_type column
+    # to mark logical train/val/test. We select the desired logical split here.
+    ds_dict = load_dataset("openlifescienceai/Med-HALT", test_type)
 
-        ds = ds_dict["train"]
-        # Filter to the requested logical split (e.g., "val")
-        ds = ds.filter(
-            lambda ex: ex.get("split_type") == split_type,
+    dataset = ds_dict["train"]
+    # Filter to the requested logical split (e.g., "val")
+    dataset = dataset.filter(lambda ex: ex.get("split_type") == "test")
+
+    # Map the raw examples into the verifiers format
+    def _map(ex: dict[str, Any]) -> dict[str, Any] | None:
+        return _map_example(
+            ex,
+            test_type=test_type,
+            shuffle_answers=shuffle_answers,
+            shuffle_seed=shuffle_seed,
+            num_few_shot=num_few_shot,
         )
 
-        if len(ds) == 0:
-            # No examples for this split_type in this test_type
-            continue
-
-        # Map the raw examples into the verifiers format
-        def _map(ex: dict[str, Any]) -> dict[str, Any] | None:
-            return _map_example(
-                ex,
-                test_type=test_type,
-                shuffle_answers=shuffle_answers,
-                shuffle_seed=shuffle_seed,
-                num_few_shot=num_few_shot,
-            )
-
-        # We can safely use HF caching only when the mapping is deterministic
-        # w.r.t. shuffle_answers (i.e., when shuffle_answers is False).
-        load_from_cache_file = not shuffle_answers
-        mapped = ds.map(
-            _map,
-            remove_columns=ds.column_names,
-            load_from_cache_file=load_from_cache_file,
-        )
-
-        # Filter out any None / empty questions just in case
-        mapped = mapped.filter(
-            lambda x: x is not None and x.get("question") is not None,
-            load_from_cache_file=load_from_cache_file,
-        )
-
-        if len(mapped) > 0:
-            datasets.append(mapped)
-
-    if not datasets:
-        raise ValueError(f"No valid datasets loaded for test types: {test_types}")
-
-    # Concatenate all test type datasets
-    combined_dataset = datasets[0] if len(datasets) == 1 else concatenate_datasets(datasets)
+    # We can safely use HF caching only when the mapping is deterministic
+    # w.r.t. shuffle_answers (i.e., when shuffle_answers is False).
+    load_from_cache_file = not shuffle_answers
+    dataset = dataset.map(
+        _map,
+        remove_columns=dataset.column_names,
+        load_from_cache_file=load_from_cache_file,
+    )
 
     # -------------------------------
     # Parser: raw JSON (FCT + NOTA)
@@ -474,7 +452,7 @@ def load_environment(
     parser = JSONParser(
         fields=[
             "is_answer_correct",  # FCT
-            "cop_index",  # NOTA
+            "correct_index",  # NOTA
         ],
         extract_fn=lambda x: x,  # (we'll pass it strings)
     )
@@ -482,12 +460,8 @@ def load_environment(
     # Create rubric with accuracy reward
     rubric = vf.Rubric(funcs=[accuracy], weights=[1.0], parser=parser)
 
-    # Med-HALT only has train split, so we use it as the main dataset
-    # No separate eval_dataset
     return vf.SingleTurnEnv(
-        dataset=combined_dataset,
-        eval_dataset=None,
-        system_prompt=system_prompt,
+        eval_dataset=dataset,
         parser=parser,
         rubric=rubric,
     )
