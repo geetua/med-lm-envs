@@ -26,11 +26,13 @@ reasoning_fct_prompt: Dict[str, str] = {
         "Don't generate incomplete or incorrect biomedical or clinical information."
     ),
     "output_format": (
-        "Output a single valid JSON object (double quotes for all keys/strings): "
-        '{"is_answer_correct": "yes" or "no", '
-        '"answer": "correct answer", '
+        "Your output format is valid JSON format: "
+        "{"
         '"why_correct": "detailed explanation why it is correct", '
-        '"why_others_incorrect": "why other options are incorrect"} '
+        '"why_others_incorrect": "why other options are incorrect", '
+        '"answer": "correct answer", '
+        '"is_answer_correct": "yes" or "no"'
+        "}. "
         "No other text."
     ),
 }
@@ -157,14 +159,14 @@ reasoning_nota_prompt = {
         "Don't generate incomplete or incorrect biomedical or clinical information."
     ),
     "output_format": (
-        "Output a single valid JSON object (double quotes for all keys/strings): "
-        '{"cop": "correct option from given options", '
-        '"cop_index": 0, '
+        "Your output format is valid JSON format: "
+        "{"
         '"why_correct": "detailed explanation why it is correct", '
-        '"why_others_incorrect": "why other options are incorrect"} '
-        "No other text."
-        "Do not include any text before or after the JSON. "
-        "End the response immediately after the closing curly brace '}'."
+        '"why_others_incorrect": "why other options are incorrect", '
+        '"cop": "correct option from given options", '
+        '"cop_index": 0'
+        "}. "
+        "No other format."
     ),
 }
 
@@ -181,8 +183,6 @@ reasoning_nota_shots = [
             },
         },
         "Output": {
-            "cop": "Frontalis suspension surgery",
-            "cop_index": 3,
             "why_correct": (
                 "Frontalis suspension surgery is used for severe ptosis with poor levator muscle function.\n"
                 "It allows the forehead to help elevate the eyelid."
@@ -191,6 +191,8 @@ reasoning_nota_shots = [
                 "The other procedures, such as Levator muscle resection, Mullerectomy, and Fasanella Servat "
                 "surgery, are used for cases of ptosis with better levator function."
             ),
+            "cop": "Frontalis suspension surgery",
+            "cop_index": 3,
         },
         "prompt_type": "default",
     },
@@ -205,8 +207,6 @@ reasoning_nota_shots = [
             },
         },
         "Output": {
-            "cop": "Lateral aspect of TMJ",
-            "cop_index": 0,
             "why_correct": (
                 "The temporo-mandibular ligament is attached to the lateral aspect of the Temporo-Mandibular "
                 "Joint (TMJ)."
@@ -215,6 +215,8 @@ reasoning_nota_shots = [
                 "The ligament is not attached to the posterior aspect of TMJ, the mandibular condyle, or the "
                 "coronoid process."
             ),
+            "cop": "Lateral aspect of TMJ",
+            "cop_index": 0,
         },
         "prompt_type": "default",
     },
@@ -224,8 +226,6 @@ reasoning_nota_shots = [
             "Options": {"0": "3", "1": "2", "2": "4", "3": "None of the above"},
         },
         "Output": {
-            "cop": "None of the above",
-            "cop_index": 3,
             "why_correct": (
                 "Lipoproteins are classified into five main types: Chylomicrons, Very Low-Density Lipoproteins "
                 "(VLDL), Intermediate-Density Lipoproteins (IDL), Low-Density Lipoproteins (LDL), and "
@@ -235,6 +235,8 @@ reasoning_nota_shots = [
                 "Options '3', '2', and '4' are incorrect as they do not correctly represent the number of main "
                 "lipoprotein types."
             ),
+            "cop": "None of the above",
+            "cop_index": 3,
         },
         "prompt_type": "task_specific",
     },
@@ -250,10 +252,10 @@ reasoning_nota_shots = [
             },
         },
         "Output": {
-            "cop": "Vitamin B12",
-            "cop_index": 2,
             "why_correct": "Vitamin B12 is primarily found in animal sources, including meats, dairy, and eggs.",
             "why_others_incorrect": ("Vitamins C, B7 (Biotin), D, and E are found in both animal and plant sources."),
+            "cop": "Vitamin B12",
+            "cop_index": 2,
         },
         "prompt_type": "default",
     },
@@ -268,12 +270,12 @@ reasoning_nota_shots = [
             },
         },
         "Output": {
-            "cop": "None of the above",
-            "cop_index": 0,
             "why_correct": "No specific part of the brain is associated with aggression in epilepsy.",
             "why_others_incorrect": (
                 "The parietal, occipital, and basal ganglia are not specifically implicated in aggression in epilepsy."
             ),
+            "cop": "None of the above",
+            "cop_index": 0,
         },
         "prompt_type": "task_specific",
     },
